@@ -93,6 +93,7 @@ async def connect(
     timeout: float | httpx.Timeout | None,
     model: str = "responses websocket",
     provider: str = "openai",
+    callback_adapter: SessionCallbackHandle | None = None,
     fallback: Callable[[], Awaitable[Connection | None]] = async_none,
 ) -> Connection | None:
     return await _RESPONSES_WEBSOCKET.ainvoke(
@@ -106,6 +107,7 @@ async def connect(
                 custom_llm_provider=provider,
             ),
             context=NativeRequestContext(),
+            callback_adapter=callback_adapter,
         ),
         call=lambda connection_type, request: call_native(connection_type.connect, request),
         preflight=lambda: assess_route(_PREFLIGHT, model, provider),
@@ -123,6 +125,7 @@ async def open_connection(
     timeout: float | httpx.Timeout | None,
     model: str,
     provider: str,
+    callback_adapter: SessionCallbackHandle | None = None,
     fallback: Callable[[], AbstractAsyncContextManager[Connection]],
 ) -> AsyncGenerator[Connection]:
     async with AsyncExitStack() as stack:
@@ -136,6 +139,7 @@ async def open_connection(
             timeout=timeout,
             model=model,
             provider=provider,
+            callback_adapter=callback_adapter,
             fallback=python_connection,
         )
         if backend is None:
