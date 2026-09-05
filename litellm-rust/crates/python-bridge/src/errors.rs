@@ -18,6 +18,7 @@ pyo3::create_exception!(
 
 pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     match err {
+        Error::Declined(message) => RustBridgeDeclined::new_err(message),
         Error::Auth(message) => PyValueError::new_err(message),
         Error::InvalidProvider(_)
         | Error::InvalidRequest(_)
@@ -27,27 +28,17 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     }
 }
 
-/// Map a core error for a route whose host keeps a Python implementation.
-///
-/// The distinction the host needs is whether the provider was already called.
-/// Everything raised before the request goes out is safe for the host to retry
-/// on its own path; anything after it is not, because the provider has already
-/// done the work and billed for it.
 pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        Error::Unsupported(_)
-        | Error::Auth(_)
-        | Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_)
-        | Error::Routing(_) => RustBridgeDeclined::new_err(err.to_string()),
+        Error::Declined(message) => RustBridgeDeclined::new_err(message),
+        Error::Auth(message) => RustUpstreamError::new_err((401u16, message)),
         Error::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
         Error::Connect(message) | Error::Network(message) | Error::InvalidResponse(message) => {
             RustUpstreamError::new_err((0u16, message))
         }
+        other => core_error_to_pyerr(other),
     }
 }
 
@@ -97,6 +88,50 @@ mod tests {
                 .and_then(|args| args.extract())
                 .expect("transport errors retain their status and message");
             assert_eq!(args, (0, message.to_string()));
+        });
+    }
+
+    #[rstest]
+    fn only_explicit_decline_authorizes_python_fallback(#[from(initialized_python)] (): ()) {
+        Python::attach(|py| {
+            let mapped = chat_completions_error_to_pyerr(Error::Declined("unsupported request"));
+            assert!(mapped.is_instance_of::<RustBridgeDeclined>(py));
+            assert_eq!(mapped.value(py).to_string(), "unsupported request");
+        });
+    }
+
+    #[rstest]
+    fn request_failures_do_not_authorize_python_fallback(#[from(initialized_python)] (): ()) {
+        Python::attach(|py| {
+            for error in [
+                Error::InvalidProvider("provider".to_string()),
+                Error::InvalidRequest("invalid".to_string()),
+                Error::Unsupported("unsupported"),
+                Error::Routing("route".to_string()),
+            ] {
+                let mapped = chat_completions_error_to_pyerr(error);
+                assert!(!mapped.is_instance_of::<RustBridgeDeclined>(py));
+                assert!(!mapped.is_instance_of::<RustUpstreamError>(py));
+            }
+        });
+    }
+
+    #[rstest]
+    fn credential_failures_do_not_authorize_python_fallback(#[from(initialized_python)] (): ()) {
+        Python::attach(|py| {
+            let mapped = chat_completions_error_to_pyerr(Error::Auth(
+                "credential exchange failed".to_string(),
+            ));
+            assert!(mapped.is_instance_of::<RustUpstreamError>(py));
+            assert_eq!(
+                mapped
+                    .value(py)
+                    .getattr("args")
+                    .unwrap()
+                    .extract::<(u16, String)>()
+                    .unwrap(),
+                (401, "credential exchange failed".to_string())
+            );
         });
     }
 
