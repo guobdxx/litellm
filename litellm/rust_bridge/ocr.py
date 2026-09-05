@@ -7,13 +7,11 @@ from typing import Final, TypeVar
 
 from . import configuration as _configuration
 from .bindings import UNCHANGED, Unchanged
-from .protocols import RustAocr, RustOcr, RustRouteDecline
+from .protocols import RustAocr, RustOcr
 from .request import NativeOCRRequest, PreparedNativeCall, call_native
 from .runtime import (
     BridgeErrorContext,
-    EndpointBinding,
     EndpointDispatch,
-    assess_route,
 )
 
 rust_ocr_enabled = _configuration.rust_ocr_enabled
@@ -29,24 +27,11 @@ _OCR: Final[EndpointDispatch[RustOcr, RustAocr]] = EndpointDispatch.native(
 )
 
 
-_PREFLIGHT: Final[EndpointBinding[RustRouteDecline]] = EndpointBinding.native(
-    route="ocr",
-    select=lambda native: native.ocr_decline,
-    enabled=_configuration.rust_ocr_enabled,
-)
-
-
 def set_rust_ocr(
     *,
     ocr: RustOcr | None | Unchanged = UNCHANGED,
     aocr: RustAocr | None | Unchanged = UNCHANGED,
-    decline: RustRouteDecline | None | Unchanged = UNCHANGED,
 ) -> None:
-    if not isinstance(decline, Unchanged):
-        if decline is None:
-            _PREFLIGHT.reset()
-        else:
-            _PREFLIGHT.override(decline)
     if not isinstance(ocr, Unchanged):
         if ocr is None:
             _OCR.sync.reset()
@@ -99,7 +84,6 @@ def dispatch_ocr(
         adapt=adapt,
         error_context=BridgeErrorContext(provider=provider, model=model),
         eligible=eligible,
-        preflight=lambda: assess_route(_PREFLIGHT, model, provider, request_format=request_format),
     )
 
 
@@ -120,5 +104,4 @@ async def adispatch_ocr(
         adapt=adapt,
         error_context=BridgeErrorContext(provider=provider, model=model),
         eligible=eligible,
-        preflight=lambda: assess_route(_PREFLIGHT, model, provider, request_format=request_format),
     )

@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
-from litellm.rust_bridge.protocols import RustAtranscription, RustRouteDecline, RustTranscription
+from litellm.rust_bridge.protocols import RustAtranscription, RustTranscription
 from litellm.rust_bridge.request import (
     NativePreCallDetails,
     NativeRequestContext,
@@ -29,11 +29,8 @@ from litellm.rust_bridge.request import (
 )
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
-    EndpointBinding,
     EndpointDispatch,
-    PythonFallback,
     always_enabled,
-    assess_route,
     async_none,
     identity,
 )
@@ -49,25 +46,12 @@ _TRANSCRIPTION: Final[EndpointDispatch[RustTranscription, RustAtranscription]] =
 )
 
 
-_PREFLIGHT: Final[EndpointBinding[RustRouteDecline]] = EndpointBinding.native(
-    route="transcription",
-    select=lambda native: native.transcription_decline,
-    enabled=always_enabled,
-)
-
-
 def configure_rust_transcription(
     enabled: bool = True,
     *,
     transcription: RustTranscription | None | Unchanged = UNCHANGED,
     atranscription: RustAtranscription | None | Unchanged = UNCHANGED,
-    decline: RustRouteDecline | None | Unchanged = UNCHANGED,
 ) -> None:
-    if not isinstance(decline, Unchanged):
-        if decline is None:
-            _PREFLIGHT.reset()
-        else:
-            _PREFLIGHT.override(decline)
     if not isinstance(transcription, Unchanged):
         if transcription is None:
             _TRANSCRIPTION.sync.reset()
@@ -117,7 +101,6 @@ def transcription(
             context=NativeRequestContext(),
         ),
         call=call_native,
-        preflight=lambda: assess_route(_PREFLIGHT, model, custom_llm_provider or ""),
         fallback=lambda: None,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
@@ -153,7 +136,6 @@ async def atranscription(
             context=NativeRequestContext(),
         ),
         call=call_native,
-        preflight=lambda: assess_route(_PREFLIGHT, model, custom_llm_provider or ""),
         fallback=async_none,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
@@ -269,15 +251,6 @@ def dispatch_transcription(
         model, provider, file, api_key, api_base, headers, optional_params, timeout, logging, fallback
     )
 
-    def preflight() -> PythonFallback | None:
-        return assess_route(
-            _PREFLIGHT,
-            model,
-            provider,
-            stream=optional_params.get("stream") is True,
-            has_custom_client=has_custom_client,
-        )
-
     error_context: Final = BridgeErrorContext(provider=provider, model=model)
     if provider == "bedrock":
         if asynchronous:
@@ -286,14 +259,12 @@ def dispatch_transcription(
                 call=call_native,
                 adapt=operation.adapt,
                 error_context=error_context,
-                preflight=preflight,
             )
         return _TRANSCRIPTION.require(
             prepare=operation.prepare,
             call=call_native,
             adapt=operation.adapt,
             error_context=error_context,
-            preflight=preflight,
         )
     if asynchronous:
         return _TRANSCRIPTION.ainvoke(
@@ -303,7 +274,6 @@ def dispatch_transcription(
             fallback=operation.afallback,
             error_context=error_context,
             eligible=rust_enabled(),
-            preflight=preflight,
         )
     return _TRANSCRIPTION.invoke(
         prepare=operation.prepare,
@@ -312,5 +282,4 @@ def dispatch_transcription(
         fallback=operation.fallback,
         error_context=error_context,
         eligible=rust_enabled(),
-        preflight=preflight,
     )
