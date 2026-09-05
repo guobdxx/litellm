@@ -10,6 +10,10 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.llms.bedrock.request_metadata import (
+    get_bedrock_request_metadata_fields,
+    resolve_bedrock_request_metadata,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -18,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
 from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
+from litellm.rust_bridge.request import NativeBedrockOptions
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -393,11 +398,15 @@ class BedrockConverseLLM(BaseAWSLLM):
         # resolved so both paths sign as the same principal. Bearer-token auth
         # resolves no SigV4 principal at all, and each path reads that token
         # itself.
-        rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
-            **optional_params,
-            **_sigv4_principal(credentials),
-            "aws_region_name": aws_region_name,
-        }
+        rust_optional_params: Final = optional_params
+        rust_bedrock_options: Final = NativeBedrockOptions(
+            aws_access_key_id=None if credentials is None else credentials.access_key,
+            aws_secret_access_key=None if credentials is None else credentials.secret_key,
+            aws_session_token=None if credentials is None else credentials.token,
+            aws_region_name=aws_region_name,
+            request_metadata_fields=get_bedrock_request_metadata_fields(),
+            request_metadata=resolve_bedrock_request_metadata(litellm_params, optional_params.get("requestMetadata")),
+        )
         serves_via_rust: Final = rust_chat_completions_accepts(
             model=model,
             messages=messages,
@@ -434,6 +443,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     extra_headers=headers,
                     timeout=timeout,
                     on_response=log_rust_post_call,
+                    bedrock=rust_bedrock_options,
                     python_fallback=lambda: self.async_completion(
                         model=model,
                         messages=messages,
@@ -464,6 +474,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 extra_headers=headers,
                 timeout=timeout,
                 on_response=log_rust_post_call,
+                bedrock=rust_bedrock_options,
             )
             if rust_response is not None:
                 return rust_response
