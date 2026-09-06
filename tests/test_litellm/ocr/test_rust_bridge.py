@@ -217,19 +217,11 @@ def build_prepared_request(
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
-    rust_bridge.set_rust_ocr(ocr=None, aocr=None, decline=None)
+    rust_bridge.set_rust_ocr(ocr=None, aocr=None)
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
-    rust_bridge.set_rust_ocr(
-        decline=lambda model, custom_llm_provider, *, context: (
-            "unsupported feature"
-            if any(getattr(context.capabilities, key) for key in ("stream", "has_agentic_hook", "has_custom_client"))
-            or context.capabilities.request_format == "native"
-            else None
-        )
-    )
     yield
-    rust_bridge.set_rust_ocr(ocr=None, aocr=None, decline=None)
+    rust_bridge.set_rust_ocr(ocr=None, aocr=None)
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
@@ -362,7 +354,7 @@ def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
     litellm.rust(True)
     rust_bridge.set_rust_ocr(ocr=bridge, aocr=async_bridge)
 
-    rust_bridge.set_rust_ocr(ocr=None, aocr=None, decline=None)
+    rust_bridge.set_rust_ocr(ocr=None, aocr=None)
     assert rust_bridge.load_rust_ocr() is None
     assert rust_bridge.load_rust_aocr() is None
 
@@ -387,6 +379,7 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
     fake_module = types.ModuleType("litellm.rust_bridge._native")
     fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
+    fake_module.ready_endpoints = {"ocr": {"callbacks"}}  # type: ignore[attr-defined]
     monkeypatch.setattr(
         importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",

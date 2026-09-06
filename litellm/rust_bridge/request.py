@@ -73,6 +73,7 @@ def vertex_options(params: Mapping[str, object]) -> NativeVertexOptions:
         location=location if isinstance(location, str) else None,
     )
 
+
 from typing_extensions import ReadOnly, TypedDict, TypeVar
 
 
