@@ -35,5 +35,9 @@ pub async fn ocr_with_observer(
     execute_ocr_provider_call(provider_request, observer).await
 }
 
+pub fn ocr_provider_supported(model: &str, provider: &str) -> bool {
+    prepare::ocr_provider_config(provider, model).is_some()
+}
+
 #[cfg(test)]
 mod tests;
