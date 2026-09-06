@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, Protocol
+
+from .callbacks import OneShotCallbackHandle
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,8 +73,7 @@ def vertex_options(params: Mapping[str, object]) -> NativeVertexOptions:
         location=location if isinstance(location, str) else None,
     )
 
-
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, TypeVar
 
 
 class NativePreCallDetails(TypedDict):
