@@ -1,3 +1,16 @@
+mod credentials;
+mod providers;
+
+pub use credentials::{
+    Clock, CredentialProvenance, SecretString, SystemClock, TokenCredential, TokenLease,
+    TokenProvider,
+};
+pub use providers::{
+    BearerAuthorizationProvider, BearerCredentialAdapter, CredentialAdapter,
+    CredentialAdapterRegistry, CredentialCandidate, CredentialKind, CredentialSpec,
+    StaticHeaderAuthorizationProvider, StaticHeaderCredentialAdapter,
+};
+
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
@@ -194,6 +207,7 @@ pub struct AuthorizationPreparation {
     pub authorizer: Arc<dyn RequestAuthorizer>,
     pub visible_headers: HeaderMap,
     pub remove_headers: Vec<HeaderName>,
+    pub provenance: Option<CredentialProvenance>,
 }
 
 pub struct FixedAuthorization {
@@ -231,6 +245,7 @@ impl AuthorizationProvider for FixedAuthorization {
                 authorizer: self.authorizer.clone(),
                 visible_headers: self.visible_headers.clone(),
                 remove_headers: self.remove_headers.clone(),
+                provenance: None,
             })
         })
     }
@@ -245,6 +260,7 @@ impl AuthorizationProvider for NoAuthorization {
                 authorizer: Arc::new(NoAuthorization),
                 visible_headers: HeaderMap::new(),
                 remove_headers: Vec::new(),
+                provenance: None,
             })
         })
     }
