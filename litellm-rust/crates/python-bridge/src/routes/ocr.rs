@@ -25,8 +25,13 @@ fn prepare_ocr(
     callback_adapter: Option<Py<PyAny>>,
     python_context: crate::execution::PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
-    let document = required_value("document", input.document, Value::is_object, "dict")?;
     let context: LiteLlmRequestContext = context.into();
+    let provider_supported =
+        litellm_core::ocr::ocr_provider_supported(&input.model, options.provider("mistral"));
+    if let Some(reason) = super::definition::request_decline(provider_supported, &context) {
+        return Err(crate::errors::RustBridgeDeclined::new_err(reason));
+    }
+    let document = required_value("document", input.document, Value::is_object, "dict")?;
     let call_id = context.litellm_call_id.clone();
     let options: RequestOptions = options.into();
     let mut observer = PythonOcrObserver::new(callback_adapter, python_context)?;
