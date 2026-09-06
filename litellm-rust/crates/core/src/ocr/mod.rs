@@ -7,7 +7,9 @@ pub mod transformation;
 pub mod types;
 
 pub use handler::execute_ocr_provider_call;
-pub use prepare::{prepare_ocr_call, prepare_ocr_provider_call};
+pub use prepare::{
+    prepare_ocr_call, prepare_ocr_provider_call, prepare_ocr_provider_call_with_token,
+};
 pub use types::{OcrRequest, PreparedOcrRequest, ProviderOcrRequest};
 
 use serde_json::Value;
@@ -37,6 +39,17 @@ pub async fn ocr_with_observer(
 
 pub fn ocr_provider_supported(model: &str, provider: &str) -> bool {
     prepare::ocr_provider_config(provider, model).is_some()
+}
+
+pub async fn ocr_with_token_provider(
+    request: OcrRequest<'_>,
+    token_provider: std::sync::Arc<dyn crate::auth::TokenProvider>,
+    observer: &mut impl OcrObserver,
+) -> Result<Value, Error> {
+    let prepared = prepare_ocr_call(request);
+    let provider_request =
+        prepare_ocr_provider_call_with_token(prepared, Some(token_provider)).await?;
+    execute_ocr_provider_call(provider_request, observer).await
 }
 
 #[cfg(test)]

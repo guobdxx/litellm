@@ -97,7 +97,7 @@ impl AttemptCancellation {
         self.state.cancelled.load(Ordering::Acquire)
     }
 
-    async fn cancelled(&self) {
+    pub async fn cancelled(&self) {
         let notified = self.state.notify.notified();
         if self.is_cancelled() {
             return;

@@ -7,14 +7,13 @@ use reqwest::{
 use serde_json::Value;
 
 use super::client::http_client;
-use super::common_utils::poll_document_intelligence;
 use super::observers::{OcrObserver, OcrPostCall, OcrPreCall};
 use super::transformation::OcrResponseHandling;
 use super::types::{OcrRequestData, ProviderOcrRequest};
 use crate::Error;
 use crate::auth::{
     AttemptBody, AttemptControl, AttemptDecision, AttemptOperation, AttemptRequest,
-    AttemptRetryPolicy, BodyReplayPolicy, FollowUpDestinationPolicy, NoAuthorization, send_attempt,
+    AttemptRetryPolicy, BodyReplayPolicy, FollowUpDestinationPolicy, send_attempt,
 };
 use crate::constants::OCR_TIMEOUT_SECS;
 use crate::http_utils::truncate_error_body;
@@ -29,21 +28,44 @@ pub struct OcrHttpResponse {
 pub async fn send_ocr_request(
     origin: &Url,
     request: AttemptRequest,
-    event: &OcrPreCall,
+    model: &str,
     observer: &mut impl OcrObserver,
+    authorization: &dyn crate::auth::AuthorizationProvider,
     control: &AttemptControl,
 ) -> Result<OcrHttpResponse, Error> {
     let response = send_attempt(
         http_client(),
         origin,
         request,
-        |_| async {
-            if observer.pre_call(event).await.is_err() {
-                tracing::warn!("OCR pre-call observer failed");
+        |view| {
+            let observer = &mut *observer;
+            async move {
+                let data = match view.body {
+                    AttemptBody::JsonObject(body) => Value::Object(body),
+                    AttemptBody::Bodyless => Value::Null,
+                };
+                let event = OcrPreCall {
+                    model: model.to_string(),
+                    request: OcrRequestData { data, files: None },
+                    api_base: view.url.to_string(),
+                    headers: view
+                        .headers
+                        .iter()
+                        .filter_map(|(name, value)| {
+                            value
+                                .to_str()
+                                .ok()
+                                .map(|value| (name.to_string(), value.to_string()))
+                        })
+                        .collect(),
+                };
+                if observer.pre_call(&event).await.is_err() {
+                    tracing::warn!("OCR pre-call observer failed");
+                }
+                Ok(AttemptDecision::Unchanged)
             }
-            Ok(AttemptDecision::Unchanged)
         },
-        &NoAuthorization,
+        authorization,
         control,
     )
     .await?;
@@ -87,15 +109,6 @@ pub async fn execute_ocr_provider_call(
         headers.append(name, value);
     }
 
-    let event = OcrPreCall {
-        model: request.model().to_string(),
-        request: OcrRequestData {
-            data: request.body().clone(),
-            files: None,
-        },
-        api_base: request.url().to_string(),
-        headers: request.upstream_headers.iter().cloned().collect(),
-    };
     let body =
         request.body().as_object().cloned().ok_or_else(|| {
             Error::InvalidRequest("OCR provider body must be a JSON object".into())
@@ -113,12 +126,14 @@ pub async fn execute_ocr_provider_call(
         retry: AttemptRetryPolicy::Never,
         body_replay: BodyReplayPolicy::Never,
     };
+    let control = AttemptControl::with_timeout(timeout);
     let response = send_ocr_request(
         &url,
         attempt,
-        &event,
+        request.model(),
         observer,
-        &AttemptControl::with_timeout(timeout),
+        request.authorization.as_ref(),
+        &control,
     )
     .await?;
 
@@ -137,11 +152,14 @@ pub async fn execute_ocr_provider_call(
                         .to_string(),
                 )
             })?;
-        let response_json = poll_document_intelligence(
-            &operation_url,
-            request.url(),
+        let response_json = poll_document_intelligence_with_auth(
+            operation_url,
+            url,
+            request.model(),
             &request.upstream_headers,
-            request.timeout,
+            request.authorization.as_ref(),
+            observer,
+            &control,
         )
         .await?;
         return Ok(request
@@ -157,4 +175,85 @@ pub async fn execute_ocr_provider_call(
         .config
         .transform_ocr_response(request.model(), response_json)?
         .into_json())
+}
+
+async fn poll_document_intelligence_with_auth(
+    operation_url: String,
+    origin: Url,
+    model: &str,
+    headers: &[(String, String)],
+    authorization: &dyn crate::auth::AuthorizationProvider,
+    observer: &mut impl OcrObserver,
+    control: &AttemptControl,
+) -> Result<Value, Error> {
+    let url = Url::parse(&operation_url)
+        .map_err(|_| Error::InvalidResponse("invalid OCR operation URL".into()))?;
+    loop {
+        let mut request_headers = HeaderMap::new();
+        for (name, value) in headers {
+            request_headers.append(
+                name.parse::<HeaderName>().map_err(|_| {
+                    Error::InvalidRequest("invalid OCR provider header name".into())
+                })?,
+                value.parse::<HeaderValue>().map_err(|_| {
+                    Error::InvalidRequest("invalid OCR provider header value".into())
+                })?,
+            );
+        }
+        let response = send_ocr_request(
+            &origin,
+            AttemptRequest {
+                method: Method::GET,
+                url: url.clone(),
+                headers: request_headers,
+                body: AttemptBody::Bodyless,
+                operation: AttemptOperation::FollowUp,
+                follow_up_destination: FollowUpDestinationPolicy::SameOrigin,
+                retry: AttemptRetryPolicy::Never,
+                body_replay: BodyReplayPolicy::Never,
+            },
+            model,
+            observer,
+            authorization,
+            control,
+        )
+        .await?;
+        let data: Value = serde_json::from_str(&response.body)
+            .map_err(|_| Error::InvalidResponse("invalid OCR polling response JSON".into()))?;
+        match data
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("succeeded") => return Ok(data),
+            Some("failed" | "canceled" | "cancelled") => {
+                return Err(Error::InvalidResponse(
+                    "Azure Document Intelligence operation failed".into(),
+                ));
+            }
+            Some("notstarted" | "running") => {}
+            _ => {
+                return Err(Error::InvalidResponse(
+                    "Azure Document Intelligence returned an invalid operation status".into(),
+                ));
+            }
+        }
+        let delay = response
+            .headers
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .and_then(|value| Duration::try_from_secs_f64(value).ok())
+            .unwrap_or(Duration::from_secs(1));
+        tokio::select! {
+            _ = control.cancellation.cancelled() => {
+                return Err(Error::Network("Request cancelled".into()));
+            }
+            result = tokio::time::timeout_at(control.deadline.into(), tokio::time::sleep(delay)) => {
+                result.map_err(|_| Error::Network("Request timed out".into()))?;
+            }
+        }
+    }
 }
